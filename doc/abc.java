@@ -28,7 +28,6 @@ import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
-import org.apache.commons.io.IOUtils;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
 
@@ -58,48 +57,42 @@ import com.sismics.rest.util.ValidationUtil;
 import com.sun.jersey.multipart.FormDataBodyPart;
 import com.sun.jersey.multipart.FormDataParam;
 
-/**
- * Book REST resources.
- * 
- * @author bgamard
- */
 @Path("/book")
 public class BookResource extends BaseResource {
-    /**
-     * Creates a new book.
-     * 
-     * @param isbn ISBN Number
-     * @return Response
-     * @throws JSONException
-     */
+
+    private BookDao bookDao;
+    private TagDao tagDao;
+    private UserBookDao userBookDao;
+    private UserDao userDao;
+
+
+    public BookResource() {
+        bookDao = new BookDao();
+        tagDao = new TagDao();
+        userBookDao = new UserBookDao();
+        userDao = new UserDao();
+    }
+    
     @PUT
     @Produces(MediaType.APPLICATION_JSON)
-    public Response add(
-            @FormParam("isbn") String isbn) throws JSONException {
+    public Response addBook(@FormParam("isbn") String isbn) throws JSONException {
         if (!authenticate()) {
             throw new ForbiddenClientException();
         }
         
-        // Validate input data
         ValidationUtil.validateRequired(isbn, "isbn");
         
-        // Fetch the book
-        BookDao bookDao = new BookDao();
         Book book = bookDao.getByIsbn(isbn);
         if (book == null) {
-            // Try to get the book from a public API
             try {
                 book = AppContext.getInstance().getBookDataService().searchBook(isbn);
             } catch (Exception e) {
                 throw new ClientException("BookNotFound", e.getCause().getMessage(), e);
             }
             
-            // Save the new book in database
             bookDao.create(book);
         }
         
-        // Create the user book if needed
-        UserBookDao userBookDao = new UserBookDao();
         UserBook userBook = userBookDao.getByBook(book.getId(), principal.getId());
         if (userBook == null) {
             userBook = new UserBook();
@@ -116,50 +109,30 @@ public class BookResource extends BaseResource {
         return Response.ok().entity(response).build();
     }
     
-    /**
-     * Deletes a book.
-     * 
-     * @param userBookId User book ID
-     * @return Response
-     * @throws JSONException
-     */
     @DELETE
     @Path("{id: [a-z0-9\\-]+}")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response delete(
-            @PathParam("id") String userBookId) throws JSONException {
+    public Response deleteBook(@PathParam("id") String userBookId) throws JSONException {
         if (!authenticate()) {
             throw new ForbiddenClientException();
         }
 
-        // Get the user book
-        UserBookDao userBookDao = new UserBookDao();
         UserBook userBook = userBookDao.getUserBook(userBookId, principal.getId());
         if (userBook == null) {
             throw new ClientException("BookNotFound", "Book not found with id " + userBookId);
         }
         
-        // Delete the user book
         userBookDao.delete(userBook.getId());
         
-        // Always return ok
         JSONObject response = new JSONObject();
         response.put("status", "ok");
         return Response.ok().entity(response).build();
     }
     
-    /**
-     * Add a book book manually.
-     * 
-     * @param title Title
-     * @param description Description
-     * @return Response
-     * @throws JSONException
-     */
     @PUT
     @Path("manual")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response add(
+    public Response addManualBook(
             @FormParam("title") String title,
             @FormParam("subtitle") String subtitle,
             @FormParam("author") String author,
@@ -174,7 +147,6 @@ public class BookResource extends BaseResource {
             throw new ForbiddenClientException();
         }
         
-        // Validate input data
         title = ValidationUtil.validateLength(title, "title", 1, 255, false);
         subtitle = ValidationUtil.validateLength(subtitle, "subtitle", 1, 255, true);
         author = ValidationUtil.validateLength(author, "author", 1, 255, false);
@@ -188,59 +160,33 @@ public class BookResource extends BaseResource {
             throw new ClientException("ValidationError", "At least one ISBN number is mandatory");
         }
         
-        // Check if this book is not already in database
-        BookDao bookDao = new BookDao();
         Book bookIsbn10 = bookDao.getByIsbn(isbn10);
         Book bookIsbn13 = bookDao.getByIsbn(isbn13);
         if (bookIsbn10 != null || bookIsbn13 != null) {
             throw new ClientException("BookAlreadyAdded", "Book already added");
         }
         
-        // Create the book
         Book book = new Book();
         book.setId(UUID.randomUUID().toString());
-        
-        if (title != null) {
-            book.setTitle(title);
-        }
-        if (subtitle != null) {
-            book.setSubtitle(subtitle);
-        }
-        if (author != null) {
-            book.setAuthor(author);
-        }
-        if (description != null) {
-            book.setDescription(description);
-        }
-        if (isbn10 != null) {
-            book.setIsbn10(isbn10);
-        }
-        if (isbn13 != null) {
-            book.setIsbn13(isbn13);
-        }
-        if (pageCount != null) {
-            book.setPageCount(pageCount);
-        }
-        if (language != null) {
-            book.setLanguage(language);
-        }
-        if (publishDate != null) {
-            book.setPublishDate(publishDate);
-        }
+        book.setTitle(title);
+        book.setSubtitle(subtitle);
+        book.setAuthor(author);
+        book.setDescription(description);
+        book.setIsbn10(isbn10);
+        book.setIsbn13(isbn13);
+        book.setPageCount(pageCount);
+        book.setLanguage(language);
+        book.setPublishDate(publishDate);
         
         bookDao.create(book);
         
-        // Create the user book
-        UserBookDao userBookDao = new UserBookDao();
         UserBook userBook = new UserBook();
         userBook.setUserId(principal.getId());
         userBook.setBookId(book.getId());
         userBook.setCreateDate(new Date());
         userBookDao.create(userBook);
         
-        // Update tags
         if (tagList != null) {
-            TagDao tagDao = new TagDao();
             Set<String> tagSet = new HashSet<>();
             Set<String> tagIdSet = new HashSet<>();
             List<Tag> tagDbList = tagDao.getByUserId(principal.getId());
@@ -256,24 +202,15 @@ public class BookResource extends BaseResource {
             tagDao.updateTagList(userBook.getId(), tagSet);
         }
         
-        // Returns the book ID
         JSONObject response = new JSONObject();
         response.put("id", userBook.getId());
         return Response.ok().entity(response).build();
     }
     
-    /**
-     * Updates the book.
-     * 
-     * @param title Title
-     * @param description Description
-     * @return Response
-     * @throws JSONException
-     */
     @POST
     @Path("{id: [a-z0-9\\-]+}")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response update(
+    public Response updateBook(
             @PathParam("id") String userBookId,
             @FormParam("title") String title,
             @FormParam("subtitle") String subtitle,
@@ -289,7 +226,6 @@ public class BookResource extends BaseResource {
             throw new ForbiddenClientException();
         }
         
-        // Validate input data
         title = ValidationUtil.validateLength(title, "title", 1, 255, true);
         subtitle = ValidationUtil.validateLength(subtitle, "subtitle", 1, 255, true);
         author = ValidationUtil.validateLength(author, "author", 1, 255, true);
@@ -299,18 +235,13 @@ public class BookResource extends BaseResource {
         language = ValidationUtil.validateLength(language, "language", 2, 2, true);
         Date publishDate = ValidationUtil.validateDate(publishDateStr, "publish_date", true);
         
-        // Get the user book
-        UserBookDao userBookDao = new UserBookDao();
-        BookDao bookDao = new BookDao();
         UserBook userBook = userBookDao.getUserBook(userBookId, principal.getId());
         if (userBook == null) {
             throw new ClientException("BookNotFound", "Book not found with id " + userBookId);
         }
         
-        // Get the book
         Book book = bookDao.getById(userBook.getBookId());
         
-        // Check that new ISBN number are not already in database
         if (!Strings.isNullOrEmpty(isbn10) && book.getIsbn10() != null && !book.getIsbn10().equals(isbn10)) {
             Book bookIsbn10 = bookDao.getByIsbn(isbn10);
             if (bookIsbn10 != null) {
@@ -325,7 +256,6 @@ public class BookResource extends BaseResource {
             }
         }
         
-        // Update the book
         if (title != null) {
             book.setTitle(title);
         }
@@ -354,9 +284,7 @@ public class BookResource extends BaseResource {
             book.setPublishDate(publishDate);
         }
         
-        // Update tags
         if (tagList != null) {
-            TagDao tagDao = new TagDao();
             Set<String> tagSet = new HashSet<>();
             Set<String> tagIdSet = new HashSet<>();
             List<Tag> tagDbList = tagDao.getByUserId(principal.getId());
@@ -372,91 +300,64 @@ public class BookResource extends BaseResource {
             tagDao.updateTagList(userBookId, tagSet);
         }
         
-        // Returns the book ID
         JSONObject response = new JSONObject();
         response.put("id", userBookId);
         return Response.ok().entity(response).build();
     }
     
-    /**
-     * Get a book.
-     * 
-     * @param id User book ID
-     * @return Response
-     * @throws JSONException
-     */
     @GET
     @Path("{id: [a-z0-9\\-]+}")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response get(
-            @PathParam("id") String userBookId) throws JSONException {
+    public Response getBook(@PathParam("id") String userBookId) throws JSONException {
         if (!authenticate()) {
             throw new ForbiddenClientException();
         }
         
-        // Fetch the user book
-        UserBookDao userBookDao = new UserBookDao();
         UserBook userBook = userBookDao.getUserBook(userBookId, principal.getId());
         if (userBook == null) {
             throw new ClientException("BookNotFound", "Book not found with id " + userBookId);
         }
         
-        // Fetch the book
-        BookDao bookDao = new BookDao();
         Book bookDb = bookDao.getById(userBook.getBookId());
         
-        // Return book data
-        JSONObject book = new JSONObject();
-        book.put("id", userBook.getId());
-        book.put("title", bookDb.getTitle());
-        book.put("subtitle", bookDb.getSubtitle());
-        book.put("author", bookDb.getAuthor());
-        book.put("page_count", bookDb.getPageCount());
-        book.put("description", bookDb.getDescription());
-        book.put("isbn10", bookDb.getIsbn10());
-        book.put("isbn13", bookDb.getIsbn13());
-        book.put("language", bookDb.getLanguage());
+        JSONObject bookJson = new JSONObject();
+        bookJson.put("id", userBook.getId());
+        bookJson.put("title", bookDb.getTitle());
+        bookJson.put("subtitle", bookDb.getSubtitle());
+        bookJson.put("author", bookDb.getAuthor());
+        bookJson.put("page_count", bookDb.getPageCount());
+        bookJson.put("description", bookDb.getDescription());
+        bookJson.put("isbn10", bookDb.getIsbn10());
+        bookJson.put("isbn13", bookDb.getIsbn13());
+        bookJson.put("language", bookDb.getLanguage());
         if (bookDb.getPublishDate() != null) {
-            book.put("publish_date", bookDb.getPublishDate().getTime());
+            bookJson.put("publish_date", bookDb.getPublishDate().getTime());
         }
-        book.put("create_date", userBook.getCreateDate().getTime());
+        bookJson.put("create_date", userBook.getCreateDate().getTime());
         if (userBook.getReadDate() != null) {
-            book.put("read_date", userBook.getReadDate().getTime());
+            bookJson.put("read_date", userBook.getReadDate().getTime());
         }
         
-        // Add tags
-        TagDao tagDao = new TagDao();
         List<TagDto> tagDtoList = tagDao.getByUserBookId(userBookId);
         List<JSONObject> tags = new ArrayList<>();
         for (TagDto tagDto : tagDtoList) {
-            JSONObject tag = new JSONObject();
-            tag.put("id", tagDto.getId());
-            tag.put("name", tagDto.getName());
-            tag.put("color", tagDto.getColor());
-            tags.add(tag);
+            JSONObject tagJson = new JSONObject();
+            tagJson.put("id", tagDto.getId());
+            tagJson.put("name", tagDto.getName());
+            tagJson.put("color", tagDto.getColor());
+            tags.add(tagJson);
         }
-        book.put("tags", tags);
+        bookJson.put("tags", tags);
         
-        return Response.ok().entity(book).build();
+        return Response.ok().entity(bookJson).build();
     }
     
-    /**
-     * Returns a book cover.
-     * 
-     * @param id User book ID
-     * @return Response
-     * @throws JSONException
-     */
     @GET
     @Path("{id: [a-z0-9\\-]+}/cover")
     @Produces(MediaType.APPLICATION_OCTET_STREAM)
-    public Response cover(
-            @PathParam("id") final String userBookId) throws JSONException {
-        // Get the user book
-        UserBookDao userBookDao = new UserBookDao();
+    public Response downloadCover(@PathParam("id") final String userBookId) throws JSONException {
         UserBook userBook = userBookDao.getUserBook(userBookId);
         
-        // Get the cover image
         File file = Paths.get(DirectoryUtil.getBookDirectory().getPath(), userBook.getBookId()).toFile();
         InputStream inputStream = null;
         try {
@@ -475,59 +376,36 @@ public class BookResource extends BaseResource {
                 .build();
     }
     
-    /**
-     * Updates a book cover.
-     * 
-     * @param id User book ID
-     * @return Response
-     * @throws JSONException
-     */
     @POST
     @Path("{id: [a-z0-9\\-]+}/cover")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response updateCover(
-            @PathParam("id") String userBookId,
-            @FormParam("url") String imageUrl) throws JSONException {
+    public Response updateCover(@PathParam("id") String userBookId, @FormParam("url") String imageUrl) throws JSONException {
         if (!authenticate()) {
             throw new ForbiddenClientException();
         }
         
-        // Get the user book
-        UserBookDao userBookDao = new UserBookDao();
         UserBook userBook = userBookDao.getUserBook(userBookId, principal.getId());
         if (userBook == null) {
             throw new ClientException("BookNotFound", "Book not found with id " + userBookId);
         }
         
-        // Get the book
-        BookDao bookDao = new BookDao();
         Book book = bookDao.getById(userBook.getBookId());
 
-        // Download the new cover
         try {
             AppContext.getInstance().getBookDataService().downloadThumbnail(book, imageUrl);
         } catch (Exception e) {
             throw new ClientException("DownloadCoverError", "Error downloading the cover image");
         }
         
-        // Always return ok
         JSONObject response = new JSONObject();
         response.put("status", "ok");
         return Response.ok(response).build();
     }
     
-    /**
-     * Returns all books.
-     * 
-     * @param limit Page limit
-     * @param offset Page offset
-     * @return Response
-     * @throws JSONException
-     */
     @GET
     @Path("list")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response list(
+    public Response listBooks(
             @QueryParam("limit") Integer limit,
             @QueryParam("offset") Integer offset,
             @QueryParam("sort_column") Integer sortColumn,
@@ -542,8 +420,6 @@ public class BookResource extends BaseResource {
         JSONObject response = new JSONObject();
         List<JSONObject> books = new ArrayList<>();
         
-        UserBookDao userBookDao = new UserBookDao();
-        TagDao tagDao = new TagDao();
         PaginatedList<UserBookDto> paginatedList = PaginatedLists.create(limit, offset);
         SortCriteria sortCriteria = new SortCriteria(sortColumn, asc);
         UserBookCriteria criteria = new UserBookCriteria();
@@ -573,7 +449,6 @@ public class BookResource extends BaseResource {
             book.put("create_date", userBookDto.getCreateTimestamp());
             book.put("read_date", userBookDto.getReadTimestamp());
             
-            // Get tags
             List<TagDto> tagDtoList = tagDao.getByUserBookId(userBookDto.getId());
             List<JSONObject> tags = new ArrayList<>();
             for (TagDto tagDto : tagDtoList) {
@@ -593,84 +468,17 @@ public class BookResource extends BaseResource {
         return Response.ok().entity(response).build();
     }
     
-    /**
-     * Imports books.
-     * 
-     * @param fileBodyPart File to import
-     * @return Response
-     * @throws JSONException
-     */
     @PUT
     @Consumes("multipart/form-data") 
     @Path("import")
-    public Response importFile(
-            @FormDataParam("file") FormDataBodyPart fileBodyPart) throws JSONException {
+    public Response importBooks(@FormDataParam("file") FormDataBodyPart fileBodyPart) throws JSONException {
         if (!authenticate()) {
             throw new ForbiddenClientException();
         }
         
-        // Validate input data
         ValidationUtil.validateRequired(fileBodyPart, "file");
 
-        UserDao userDao = new UserDao();
         User user = userDao.getById(principal.getId());
         
         InputStream in = fileBodyPart.getValueAs(InputStream.class);
-        File importFile = null;
-        try {
-            // Copy the incoming stream content into a temporary file
-            importFile = File.createTempFile("books_import", null);
-            IOUtils.copy(in, new FileOutputStream(importFile));
-            
-            BookImportedEvent event = new BookImportedEvent();
-            event.setUser(user);
-            event.setImportFile(importFile);
-            AppContext.getInstance().getImportEventBus().post(event);
-            
-            // Always return ok
-            JSONObject response = new JSONObject();
-            response.put("status", "ok");
-            return Response.ok().entity(response).build();
-        } catch (Exception e) {
-            if (importFile != null) {
-                try {
-                    importFile.delete();
-                } catch (SecurityException e2) {
-                    // NOP
-                }
-            }
-            throw new ServerException("ImportError", "Error importing books", e);
-        }
-    }
-    
-    /**
-     * Set a book as read/unread.
-     * 
-     * @param id User book ID
-     * @param read Read state
-     * @return Response
-     * @throws JSONException
-     */
-    @POST
-    @Path("{id: [a-z0-9\\-]+}/read")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response read(
-            @PathParam("id") final String userBookId,
-            @FormParam("read") boolean read) throws JSONException {
-        if (!authenticate()) {
-            throw new ForbiddenClientException();
-        }
-        
-        // Get the user book
-        UserBookDao userBookDao = new UserBookDao();
-        UserBook userBook = userBookDao.getUserBook(userBookId, principal.getId());
-        
-        // Update the read date
-        userBook.setReadDate(read ? new Date() : null);
-        
-        // Always return ok
-        JSONObject response = new JSONObject();
-        response.put("status", "ok");
-        return Response.ok().entity(response).build();
-    }
-}
+        File importFile =
